@@ -1,0 +1,43 @@
+{
+    "cmake.configureOnOpen": true,
+    "todo-tree.tree.showBadges": false,
+    "todo-tree.highlights.customHighlight": {
+        "TODO": {
+            "icon": "check-circle",
+            "type": "line",
+            "foreground": "#000000",
+            "iconColour": "#FFFF00",
+            "background": "#FFFF00",
+            "fontWeight": "bold",
+            "gutterIcon": true
+
+        },
+        "FIXME": {
+            "icon": "alert",
+            "type": "line",
+            "foreground": "#111111",
+            "background": "#ff0000",
+            "iconColour": "#ff0000",
+            "fontWeight": "bold",
+            "gutterIcon": true
+        },
+        "NOTE": {
+            "icon": "comment",
+            "type": "line",
+            "foreground": "#111111",
+            "background": "#00FF00",
+            "iconColour": "#00FF00",
+            "fontWeight": "bold",
+            "gutterIcon": false
+        },
+        "OPTIMIZE": {
+            "icon": "flame",
+            "type": "line",
+            "foreground": "#111111",
+            "background": "#00e1ff",
+            "iconColour": "#00e1ff",
+            "fontWeight": "bold",
+            "gutterIcon": true
+        }
+    }
+}
