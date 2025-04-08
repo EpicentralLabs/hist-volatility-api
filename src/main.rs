@@ -4,6 +4,8 @@ use historical_volatility_api::{config::AppConfig, routes::register_routes};
 // TODO (Pen):
 // - Logging
 // - Be careful what you log when it comes to secrets!
+// - More documentation + tests, make sure everything is correct + how to actually use the API
+// - What happens when you send invalid data to birdeye? And what does this API send back? (like when you input an invalid token address)
 #[tokio::main]
 async fn main() {
     dotenv().ok();
