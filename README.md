@@ -8,7 +8,6 @@ This project provides a simple **Axum-based HTTP API** for calculating **histori
 - Fetches **daily** historical token prices from Birdeye.
 - Calculates **average daily volatility** for a specific date range.
 - Exposes a **health check** endpoint.
-- Structured **JSON responses**.
 - Automatic **request/response logging**.
 - Simple, focused, and lightweight.
 
@@ -17,6 +16,8 @@ This project provides a simple **Axum-based HTTP API** for calculating **histori
 ### `GET /historicalVolatility`
 
 Calculates historical volatility for a given token and time range.
+Both fromDate and toDate are included in the calculation.
+For example, if fromDate = 2024-12-31 and toDate = 2025-01-02, prices from all three days (31st, 1st, and 2nd) will be used.
 
 #### Query Parameters (all **required**):
 
