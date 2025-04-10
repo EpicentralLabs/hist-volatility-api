@@ -2,8 +2,6 @@ use dotenvy::dotenv;
 use historical_volatility_api::{config::AppConfig, routes::register_routes};
 
 // TODO (Pen):
-// - Logging
-// - Be careful what you log when it comes to secrets!
 // - More documentation + tests, make sure everything is correct + how to actually use the API
 #[tokio::main]
 async fn main() {

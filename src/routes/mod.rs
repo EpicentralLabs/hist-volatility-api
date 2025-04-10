@@ -8,7 +8,7 @@ use health_check::health_check;
 use historical_volatility::get_historical_volatility;
 use tower_http::{
     catch_panic::CatchPanicLayer,
-    trace::{DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer},
+    trace::{DefaultOnRequest, TraceLayer},
 };
 use tracing::Level;
 
