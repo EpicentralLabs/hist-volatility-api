@@ -6,7 +6,7 @@ use axum::{
 use serde::Serialize;
 
 pub enum ApiError {
-    BirdeyeRequestFailed(reqwest::Error),
+    InternalServerError,
     NotEnoughData,
     InvalidQuery(String),
 }
@@ -20,10 +20,10 @@ struct ApiErrorResponse {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, error, message) = match self {
-            ApiError::BirdeyeRequestFailed(_) => (
-                StatusCode::BAD_GATEWAY,
-                "Bad Gateway",
-                "Failed to fetch data from Birdeye".to_owned(),
+            ApiError::InternalServerError => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal Server Error",
+                "Something bad happened.".to_owned(),
             ),
             ApiError::NotEnoughData => (
                 StatusCode::BAD_REQUEST,
@@ -39,7 +39,7 @@ impl IntoResponse for ApiError {
     }
 }
 impl From<reqwest::Error> for ApiError {
-    fn from(err: reqwest::Error) -> Self {
-        ApiError::BirdeyeRequestFailed(err)
+    fn from(_err: reqwest::Error) -> Self {
+        ApiError::InternalServerError
     }
 }

@@ -19,8 +19,8 @@ pub fn register_routes(config: AppConfig) -> Router {
     // .allow_headers(Any);
 
     Router::new()
-        .route("/historical_volatility", get(get_historical_volatility))
-        .route("/health_check", get(health_check))
+        .route("/historicalVolatility", get(get_historical_volatility))
+        .route("/healthCheck", get(health_check))
         .with_state(config)
         .layer(CatchPanicLayer::custom(|_err| panic_handler()))
         // .layer(cors)

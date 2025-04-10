@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 /// Query parameters for the volatility request.
 #[derive(Deserialize)]
+#[serde(rename_all="camelCase")]
 pub struct HistoricalVolatilityQuery {
     #[serde(with = "custom_date_serde")]
     pub from_date: DateTime<Utc>,

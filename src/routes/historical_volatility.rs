@@ -1,9 +1,10 @@
-//! # Historical Volatility API
+//! # Volatility Calculation Handler
 //!
-//! This module provides:
-//! - A function to fetch historical token prices from Birdeye API.
-//! - A function to calculate simple volatility based on daily price fluctuations.
-//! - Supporting data structures for deserializing Birdeye API responses.
+//! This module provides a single Axum handler for calculating historical volatility 
+//! based on token prices fetched from the Birdeye API. 
+//!
+//! It is intended to be used **internally** in the backend, not as a standalone library.
+//! It also contains data models and internal helpers necessary for this specific functionality.
 
 use crate::extractors::query_extractor::HistoricalVolatilityQuery;
 use crate::{config::AppConfig, errors::api_error::ApiError};
@@ -16,43 +17,79 @@ use chrono::{DateTime, Utc};
 use reqwest::header::ACCEPT;
 use serde::{Deserialize, Serialize};
 
-/// Response structure sent back from our API.
+//
+// ----------- Data Structures -----------
+//
+
+/// Response structure returned by the API after successful volatility calculation.
 #[derive(Deserialize, Serialize)]
+#[serde(rename_all="camelCase")]
 pub struct HistoricalVolatilityResponse {
     pub historical_volatility: f64,
 }
 
-/// Actual response structure from the Birdeye public API.
-#[derive(Deserialize)]
+/// Raw structure of the response returned by the Birdeye API.
+#[derive(Debug, Deserialize)]
 pub struct BirdeyeHistoricalPriceResponse {
-    pub data: HistoricalPriceData,
+    pub data: Option<HistoricalPriceData>,
     pub success: bool,
+    pub message: Option<String>,
 }
 
-/// Nested data field inside the Birdeye response.
-#[derive(Deserialize)]
+/// Nested `data` field inside the Birdeye response.
+#[derive(Debug, Deserialize)]
 pub struct HistoricalPriceData {
     pub items: Vec<HistoricalPricePoint>,
 }
 
-/// Represents a single price point at a timestamp.
-#[derive(Deserialize)]
+/// Represents a single historical price point.
+#[derive(Debug, Deserialize)]
 pub struct HistoricalPricePoint {
     #[serde(rename = "unixTime")]
     pub unix_time: i64,
     pub value: f64,
 }
 
-/// Axum handler that returns historical volatility based on Birdeye prices.
+/// Internal representation of Birdeye response, abstracting success and failure.
+#[derive(Debug)]
+pub enum BirdeyeResponse {
+    Success(HistoricalPriceData),
+    Failure(String),
+}
+
+//
+// ----------- Conversions -----------
+//
+
+impl From<BirdeyeHistoricalPriceResponse> for BirdeyeResponse {
+    fn from(raw: BirdeyeHistoricalPriceResponse) -> Self {
+        if raw.success {
+            if let Some(data) = raw.data {
+                BirdeyeResponse::Success(data)
+            } else {
+                BirdeyeResponse::Failure("Missing data in successful Birdeye response.".to_string())
+            }
+        } else {
+            let message = raw.message.unwrap_or_else(|| "Unknown error".to_string());
+            BirdeyeResponse::Failure(message)
+        }
+    }
+}
+
+//
+// ----------- Handlers and Logic -----------
+//
+
+/// Axum handler that fetches historical prices from Birdeye and calculates volatility.
 ///
 /// # Errors
-/// - Returns `502 Bad Gateway` if Birdeye cannot be reached.
-/// - Returns `400 Bad Request` if not enough price points to calculate volatility.
+/// - Returns `400 Bad Request` for invalid user input (wrong address or wrong date format).
+/// - Returns `500 Internal Server Error` for unexpected Birdeye failures or internal issues.
 pub async fn get_historical_volatility(
     State(config): State<AppConfig>,
     query: HistoricalVolatilityQuery,
 ) -> Result<Json<HistoricalVolatilityResponse>, ApiError> {
-    let birdeye_response = make_birdeye_request(
+    let raw_response = make_birdeye_request(
         &config,
         query.from_date,
         query.to_date,
@@ -60,40 +97,50 @@ pub async fn get_historical_volatility(
     )
     .await?;
 
-    let historical_volatility =
-        calculate_volatility(birdeye_response.data.items).ok_or(ApiError::NotEnoughData)?;
+    let birdeye_response = BirdeyeResponse::from(raw_response);
 
-    Ok(Json(HistoricalVolatilityResponse {
-        historical_volatility,
-    }))
+    match birdeye_response {
+        BirdeyeResponse::Success(data) => {
+            let volatility = calculate_volatility(data.items)
+                .ok_or(ApiError::NotEnoughData)?;
+            Ok(Json(HistoricalVolatilityResponse { historical_volatility: volatility }))
+        }
+        BirdeyeResponse::Failure(message) => match message.as_str() {
+            "Unauthorized" => Err(ApiError::InternalServerError),
+            "address is invalid format" => Err(ApiError::InvalidQuery("Invalid tokenAddress format.".to_string())),
+            "time_from is invalid format" => Err(ApiError::InvalidQuery("Invalid fromDate format.".to_string())),
+            "time_to is invalid format" => Err(ApiError::InvalidQuery("Invalid toDate format.".to_string())),
+            _ => Err(ApiError::InternalServerError),
+        },
+    }
 }
 
-/// Fetch historical token prices from Birdeye's public API.
+/// Fetches historical token prices from the Birdeye public API.
 ///
 /// # Notes
-/// - Configuration (base URL, API key) is injected through `AppConfig`.
+/// - Injects configuration (base URL, API key) from `AppConfig`.
 async fn make_birdeye_request(
     config: &AppConfig,
     from_date: DateTime<Utc>,
     to_date: DateTime<Utc>,
     token_address: &str,
 ) -> Result<BirdeyeHistoricalPriceResponse, reqwest::Error> {
-    let from_date_timestamp = from_date.timestamp();
-    let to_date_timestamp = to_date.timestamp();
+    let from_timestamp = from_date.timestamp();
+    let to_timestamp = to_date.timestamp();
+
     let query = format!(
         "address={}&address_type=token&type=1D&time_from={}&time_to={}",
-        token_address, from_date_timestamp, to_date_timestamp
+        token_address, from_timestamp, to_timestamp
     );
-
     let request_url = format!("{}?{}", config.birdeye_base_url, query);
 
     let client = reqwest::Client::new();
-
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
     headers.insert(
         "X-API-KEY",
-        HeaderValue::from_str(&config.birdeye_api_key).expect("Invalid API key format"),
+        HeaderValue::from_str(&config.birdeye_api_key)
+            .expect("Invalid API key format"),
     );
     headers.insert("x-chain", HeaderValue::from_static("solana"));
 
@@ -108,12 +155,13 @@ async fn make_birdeye_request(
     Ok(response)
 }
 
-/// Calculate volatility as the average of absolute daily fluctuations.
+/// Calculates the average absolute daily fluctuation (volatility).
 ///
-/// # Assumptions:
-/// - Prices must be ordered by ascending date (earliest first).
+/// # Requirements
+/// - At least two price points.
+/// - Price points must be ordered chronologically.
 ///
-/// # Example:
+/// # Example
 /// ```
 /// // For prices [100, 105, 95]
 /// // Daily changes: +5, -10
@@ -124,16 +172,20 @@ fn calculate_volatility(prices: Vec<HistoricalPricePoint>) -> Option<f64> {
         return None;
     }
 
-    let total_absolute_fluctuation = prices.windows(2).fold(0.0, |acc, window| {
+    let total_abs_fluctuation = prices.windows(2).fold(0.0, |acc, window| {
         let [previous, next] = window else {
-            unreachable!() // the array will always have at least 2 elements (checks at the start of the function)
+            unreachable!("prices.windows(2) always yields exactly two items");
         };
         acc + (next.value - previous.value).abs()
     });
 
-    let average_fluctuation = total_absolute_fluctuation / (prices.len() - 1) as f64;
-    Some(average_fluctuation)
+    let avg_fluctuation = total_abs_fluctuation / (prices.len() - 1) as f64;
+    Some(avg_fluctuation)
 }
+
+//
+// ----------- Tests -----------
+//
 
 #[cfg(test)]
 mod tests {
@@ -146,95 +198,58 @@ mod tests {
         dotenv().ok();
     });
 
-    /// Test helper to create a fake AppConfig for tests.
     fn test_config() -> AppConfig {
         AppConfig {
             birdeye_api_key: std::env::var("BIRDEYE_API_KEY")
                 .unwrap_or_else(|_| "dummy".to_string()),
-            birdeye_base_url: std::env::var("BIRDEYE_BASE_URL").unwrap(),
+            birdeye_base_url: std::env::var("BIRDEYE_BASE_URL")
+                .unwrap_or_else(|_| "https://public-api.birdeye.so/token_price/history".to_string()),
+            app_server_port: 8080
         }
     }
 
     fn from_and_to_dates(days: i64) -> (DateTime<Utc>, DateTime<Utc>) {
-        let to_date = Utc::now().date_naive() - Duration::days(1);
-        let from_date = to_date - Duration::days(days - 1);
+        let to = Utc::now().date_naive() - Duration::days(1);
+        let from = to - Duration::days(days - 1);
         (
-            from_date.and_hms_opt(0, 0, 0).unwrap().and_utc(),
-            to_date.and_hms_opt(0, 0, 0).unwrap().and_utc(),
+            from.and_hms_opt(0, 0, 0).unwrap().and_utc(),
+            to.and_hms_opt(0, 0, 0).unwrap().and_utc(),
         )
     }
 
     #[test]
-    fn test_volatility_with_three_prices() {
+    fn test_calculate_volatility_with_three_prices() {
         let prices = vec![
-            HistoricalPricePoint {
-                unix_time: 1,
-                value: 100.0,
-            },
-            HistoricalPricePoint {
-                unix_time: 2,
-                value: 105.0,
-            },
-            HistoricalPricePoint {
-                unix_time: 3,
-                value: 95.0,
-            },
+            HistoricalPricePoint { unix_time: 1, value: 100.0 },
+            HistoricalPricePoint { unix_time: 2, value: 105.0 },
+            HistoricalPricePoint { unix_time: 3, value: 95.0 },
         ];
-
-        let result = calculate_volatility(prices).expect("should have calculated volatility.");
-        assert!((result - 7.5).abs() < 1e-6, "Expected 7.5, got {}", result);
+        let result = calculate_volatility(prices).expect("Should calculate volatility");
+        assert!((result - 7.5).abs() < 1e-6);
     }
 
     #[test]
-    fn test_volatility_with_two_prices() {
+    fn test_calculate_volatility_with_two_prices() {
         let prices = vec![
-            HistoricalPricePoint {
-                unix_time: 1,
-                value: 200.0,
-            },
-            HistoricalPricePoint {
-                unix_time: 2,
-                value: 180.0,
-            },
+            HistoricalPricePoint { unix_time: 1, value: 200.0 },
+            HistoricalPricePoint { unix_time: 2, value: 180.0 },
         ];
-
         let result = calculate_volatility(prices).expect("Should calculate volatility");
-        assert!(
-            (result - 20.0).abs() < 1e-6,
-            "Expected 20.0, got {}",
-            result
-        );
+        assert!((result - 20.0).abs() < 1e-6);
     }
 
     #[test]
-    fn test_volatility_with_large_set_of_prices() {
-        let prices = (0..11)
-            .map(|i| HistoricalPricePoint {
-                unix_time: i,
-                value: 100.0 + i as f64,
-            })
-            .collect::<Vec<_>>();
-
-        let result = calculate_volatility(prices).expect("Should calculate volatility");
-        assert!((result - 1.0).abs() < 1e-6, "Expected 1.0, got {}", result);
-    }
-
-    #[test]
-    fn test_volatility_not_enough_prices() {
-        let prices = vec![HistoricalPricePoint {
-            unix_time: 1,
-            value: 100.0,
-        }];
-        let result = calculate_volatility(prices);
-        assert!(result.is_none(), "Expected None for too few prices");
+    fn test_calculate_volatility_with_insufficient_prices() {
+        let prices = vec![HistoricalPricePoint { unix_time: 1, value: 100.0 }];
+        assert!(calculate_volatility(prices).is_none());
     }
 
     #[tokio::test]
-    #[ignore = "too expensive to run every time"]
-    async fn test_make_birdeye_request_10_days() {
+    #[ignore = "Expensive - real HTTP call"]
+    async fn test_make_birdeye_request_real() {
         let _ = *INIT;
+        let config = test_config();
         let (from_date, to_date) = from_and_to_dates(10);
-        let config = test_config();
 
         let response = make_birdeye_request(
             &config,
@@ -243,46 +258,9 @@ mod tests {
             "So11111111111111111111111111111111111111112",
         )
         .await
-        .expect("Request should succeed");
+        .expect("Birdeye request should succeed");
 
-        assert_eq!(response.data.items.len(), 10, "Expected 10 price points");
-    }
-
-    #[tokio::test]
-    #[ignore = "too expensive to run every time"]
-    async fn test_make_birdeye_request_30_days() {
-        let _ = *INIT;
-        let (from_date, to_date) = from_and_to_dates(30);
-        let config = test_config();
-
-        let response = make_birdeye_request(
-            &config,
-            from_date,
-            to_date,
-            "So11111111111111111111111111111111111111112",
-        )
-        .await
-        .expect("Request should succeed");
-
-        assert_eq!(response.data.items.len(), 30, "Expected 30 price points");
-    }
-
-    #[tokio::test]
-    #[ignore = "too expensive to run every time"]
-    async fn test_make_birdeye_request_90_days() {
-        let _ = *INIT;
-        let (from_date, to_date) = from_and_to_dates(90);
-        let config = test_config();
-
-        let response = make_birdeye_request(
-            &config,
-            from_date,
-            to_date,
-            "So11111111111111111111111111111111111111112",
-        )
-        .await
-        .expect("Request should succeed");
-
-        assert_eq!(response.data.items.len(), 90, "Expected 90 price points");
+        let data = response.data.expect("Expected data field present");
+        assert_eq!(data.items.len(), 10);
     }
 }

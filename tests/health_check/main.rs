@@ -12,6 +12,7 @@ async fn health_check_returns_200_ok() {
     let app = register_routes(AppConfig {
         birdeye_api_key: "DUMMY_KEY".to_string(),
         birdeye_base_url: "https://dummy.birdeye.api".to_string(),
+        app_server_port: 8080
     });
 
     // Act: Send GET /health_check
@@ -19,7 +20,7 @@ async fn health_check_returns_200_ok() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/health_check")
+                .uri("/healthCheck")
                 .body(Body::empty())
                 .unwrap(),
         )
