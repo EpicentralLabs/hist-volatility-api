@@ -5,18 +5,21 @@ use historical_volatility_api::{config::AppConfig, routes::register_routes};
 // - Logging
 // - Be careful what you log when it comes to secrets!
 // - More documentation + tests, make sure everything is correct + how to actually use the API
-// - camelCase in queries
 #[tokio::main]
 async fn main() {
     dotenv().ok();
+
+    tracing_subscriber::fmt().init();
+
     let config = AppConfig::from_env().expect("Should have loaded config.");
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.app_server_port))
         .await
         .unwrap();
 
-    let app = register_routes(config);
+    let addr = listener.local_addr().unwrap();
+    tracing::info!("Listening on {}", addr);
 
-    println!("Listening on {}", listener.local_addr().unwrap());
+    let app = register_routes(config);
     axum::serve(listener, app).await.unwrap();
 }

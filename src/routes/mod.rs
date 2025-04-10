@@ -1,3 +1,4 @@
+use crate::config::AppConfig;
 use axum::{
     http::{Response, StatusCode},
     routing::get,
@@ -5,8 +6,11 @@ use axum::{
 };
 use health_check::health_check;
 use historical_volatility::get_historical_volatility;
-use tower_http::catch_panic::CatchPanicLayer;
-use crate::config::AppConfig;
+use tower_http::{
+    catch_panic::CatchPanicLayer,
+    trace::{DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer},
+};
+use tracing::Level;
 
 pub mod health_check;
 pub mod historical_volatility;
@@ -23,7 +27,8 @@ pub fn register_routes(config: AppConfig) -> Router {
         .route("/healthCheck", get(health_check))
         .with_state(config)
         .layer(CatchPanicLayer::custom(|_err| panic_handler()))
-        // .layer(cors)
+        .layer(TraceLayer::new_for_http().on_request(DefaultOnRequest::new().level(Level::INFO)))
+    // .layer(cors)
 }
 
 fn panic_handler() -> Response<String> {

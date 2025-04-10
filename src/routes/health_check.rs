@@ -1,7 +1,8 @@
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use tracing::{error, info, instrument};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct HealthCheckResponse {
     pub message: String,
 }
@@ -17,7 +18,9 @@ pub struct HealthCheckResponse {
 /// ```
 ///
 /// Useful for uptime monitoring.
+#[instrument(ret)]
 pub async fn health_check() -> Json<HealthCheckResponse> {
+    info!("Received health check request.");
     Json(HealthCheckResponse {
         message: "Server is running.".to_owned(),
     })
