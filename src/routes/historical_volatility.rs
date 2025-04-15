@@ -6,8 +6,9 @@
 //! It is intended to be used **internally** in the backend, not as a standalone library.
 //! It also contains data models and internal helpers necessary for this specific functionality.
 
+use crate::config::AppConfig;
 use crate::extractors::query_extractor::HistoricalVolatilityQuery;
-use crate::{config::AppConfig, errors::api_error::ApiError, background::volatility_cache::VolatilityCache};
+use crate::{errors::api_error::ApiError, state::AppState};
 use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue},
@@ -86,10 +87,9 @@ impl From<BirdeyeHistoricalPriceResponse> for BirdeyeResponse {
 /// # Errors
 /// - Returns `400 Bad Request` for invalid user input (wrong address or wrong date format).
 /// - Returns `500 Internal Server Error` for unexpected Birdeye failures or internal issues.
-#[instrument(ret, err, skip(config, volatility_cache))]
+#[instrument(ret, err, skip(state))]
 pub async fn get_historical_volatility(
-    State(config): State<AppConfig>,
-    State(volatility_cache): State<VolatilityCache>,
+    State(state): State<AppState>,
     query: HistoricalVolatilityQuery,
 ) -> Result<Json<HistoricalVolatilityResponse>, ApiError> {
     // Log the incoming request parameters
@@ -101,7 +101,7 @@ pub async fn get_historical_volatility(
     );
 
     // Check if we have cached volatility data for this token
-    if let Some(volatility) = volatility_cache.get_volatility(&query.token_address).await {
+    if let Some(volatility) = state.volatility_cache.get_volatility(&query.token_address).await {
         info!(
             token_address = %query.token_address,
             volatility = %volatility,
@@ -114,7 +114,7 @@ pub async fn get_historical_volatility(
     }
 
     // If not in cache, add it to the cache and calculate volatility
-    if let Err(e) = volatility_cache.add_token(query.token_address.clone()).await {
+    if let Err(e) = state.volatility_cache.add_token(query.token_address.clone()).await {
         error!(
             token_address = %query.token_address,
             error = %e,
@@ -124,7 +124,7 @@ pub async fn get_historical_volatility(
     }
 
     // Get the newly calculated volatility from the cache
-    let volatility = volatility_cache.get_volatility(&query.token_address).await
+    let volatility = state.volatility_cache.get_volatility(&query.token_address).await
         .ok_or(ApiError::NotEnoughData)?;
 
     Ok(Json(HistoricalVolatilityResponse {
@@ -135,6 +135,7 @@ pub async fn get_historical_volatility(
 ///
 /// # Notes
 /// - Injects configuration (base URL, API key) from `AppConfig`.
+#[allow(dead_code)]
 async fn make_birdeye_request(
     config: &AppConfig,
     from_date: DateTime<Utc>,

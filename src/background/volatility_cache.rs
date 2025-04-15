@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use tracing::{info, warn, error};
 use crate::config::AppConfig;
-use crate::routes::historical_volatility::{BirdeyeHistoricalPriceResponse, HistoricalPricePoint, calculate_volatility};
+use crate::routes::historical_volatility::{BirdeyeHistoricalPriceResponse, calculate_volatility};
 
 /// Cache for storing volatility data for different tokens
 #[derive(Clone)]
