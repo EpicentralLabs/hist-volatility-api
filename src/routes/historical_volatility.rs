@@ -45,7 +45,7 @@ pub struct HistoricalPriceData {
 }
 
 /// Represents a single historical price point.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct HistoricalPricePoint {
     #[serde(rename = "unixTime")]
     pub unix_time: i64,

@@ -19,6 +19,19 @@ async fn main() {
     // Initialize the volatility cache
     let volatility_cache = VolatilityCache::new(config.clone());
     
+    // Add SOL token to cache on startup
+    match volatility_cache.add_token("So11111111111111111111111111111111111111112".to_string()).await {
+        Ok(_) => tracing::info!("Added SOL token to volatility cache"),
+        Err(e) => tracing::error!("Failed to add SOL token to cache: {}", e),
+    }
+    
+    // Optionally add more tokens here
+    // Example: USDC token
+    match volatility_cache.add_token("LABSh5DTebUcUbEoLzXKCiXFJLecDFiDWiBGUU1GpxR".to_string()).await {
+        Ok(_) => tracing::info!("Added USDC token to volatility cache"),
+        Err(e) => tracing::error!("Failed to add LABS token to cache: {}", e),
+    }
+    
     // Start the background task that updates volatility data every 60 seconds
     volatility_cache.start_background_task().await;
 

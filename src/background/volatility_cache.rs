@@ -37,6 +37,10 @@ impl VolatilityCache {
         let config = Arc::clone(&self.config);
         
         tokio::spawn(async move {
+            // Run update immediately once
+            Self::update_all_tokens(&cache, &config).await;
+            
+            // Then start the loop that runs every 60 seconds
             loop {
                 // Sleep for 60 seconds
                 tokio::time::sleep(Duration::from_secs(60)).await;
@@ -79,16 +83,43 @@ impl VolatilityCache {
         
         // Process the response
         if let Some(data) = response.data {
+            let items_len = data.items.len();
+            
+            // Calculate percent change for reference if we have enough data points
+            let percent_change = if items_len >= 2 {
+                let first = data.items.first().unwrap().value;
+                let last = data.items.last().unwrap().value;
+                ((last - first) / first) * 100.0
+            } else {
+                0.0
+            };
+            
             // Calculate volatility
-            if let Some(volatility) = calculate_volatility(data.items) {
+            let volatility_result = calculate_volatility(data.items);
+            
+            if let Some(volatility) = volatility_result {
                 // Update the cache
                 let mut cache = cache.write().await;
                 cache.insert(token_address.to_string(), (volatility, Utc::now()));
                 
+                // Print detailed update with timestamp, token, and volatility value
+                println!("\n[{}] 90-DAY VOLATILITY UPDATE:", Utc::now().format("%Y-%m-%d %H:%M:%S"));
+                println!("Token: {}", token_address);
+                println!("Period: {} to {}", 
+                         from_date.format("%Y-%m-%d"), 
+                         to_date.format("%Y-%m-%d"));
+                println!("Data points: {}", items_len);
+                println!("Volatility: {:.6}", volatility);
+                println!("90-day Change: {:.2}%", percent_change);
+                println!("-----------------------------------");
+                
                 info!(
                     token_address = %token_address,
                     volatility = %volatility,
-                    "Updated token volatility"
+                    from_date = %from_date.format("%Y-%m-%d"),
+                    to_date = %to_date.format("%Y-%m-%d"),
+                    data_points = %items_len,
+                    "Updated 90-day token volatility"
                 );
             } else {
                 warn!(
