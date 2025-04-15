@@ -6,7 +6,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use tracing::{error, info};
+use tracing::info;
 
 /// Query parameters for the volatility request.
 #[derive(Deserialize, Debug)]
