@@ -7,7 +7,7 @@
 //! It also contains data models and internal helpers necessary for this specific functionality.
 
 use crate::extractors::query_extractor::HistoricalVolatilityQuery;
-use crate::{config::AppConfig, errors::api_error::ApiError};
+use crate::{config::AppConfig, errors::api_error::ApiError, background::volatility_cache::VolatilityCache};
 use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue},
@@ -16,7 +16,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use reqwest::header::ACCEPT;
 use serde::{Deserialize, Serialize};
-use tracing::{info, instrument};
+use tracing::{info, instrument, error};
 
 //
 // ----------- Data Structures -----------
@@ -86,11 +86,13 @@ impl From<BirdeyeHistoricalPriceResponse> for BirdeyeResponse {
 /// # Errors
 /// - Returns `400 Bad Request` for invalid user input (wrong address or wrong date format).
 /// - Returns `500 Internal Server Error` for unexpected Birdeye failures or internal issues.
-#[instrument(ret, err, skip(config))]
+#[instrument(ret, err, skip(config, volatility_cache))]
 pub async fn get_historical_volatility(
     State(config): State<AppConfig>,
+    State(volatility_cache): State<VolatilityCache>,
     query: HistoricalVolatilityQuery,
 ) -> Result<Json<HistoricalVolatilityResponse>, ApiError> {
+    // Log the incoming request parameters
     info!(
         from_date = %query.from_date,
         to_date = %query.to_date,
@@ -98,38 +100,36 @@ pub async fn get_historical_volatility(
         "Received historical volatility request."
     );
 
-    let raw_response = make_birdeye_request(
-        &config,
-        query.from_date,
-        query.to_date,
-        &query.token_address,
-    )
-    .await?;
-
-    let birdeye_response = BirdeyeResponse::from(raw_response);
-
-    match birdeye_response {
-        BirdeyeResponse::Success(data) => {
-            let volatility = calculate_volatility(data.items).ok_or(ApiError::NotEnoughData)?;
-
-            Ok(Json(HistoricalVolatilityResponse {
-                historical_volatility: volatility,
-            }))
-        }
-        BirdeyeResponse::Failure(message) => match message.as_str() {
-            "Unauthorized" => Err(ApiError::InternalServerError),
-            "address is invalid format" => Err(ApiError::InvalidQuery(
-                "Invalid tokenAddress format.".to_string(),
-            )),
-            "time_from is invalid format" => Err(ApiError::InvalidQuery(
-                "Invalid fromDate format.".to_string(),
-            )),
-            "time_to is invalid format" => {
-                Err(ApiError::InvalidQuery("Invalid toDate format.".to_string()))
-            }
-            _ => Err(ApiError::InternalServerError),
-        },
+    // Check if we have cached volatility data for this token
+    if let Some(volatility) = volatility_cache.get_volatility(&query.token_address).await {
+        info!(
+            token_address = %query.token_address,
+            volatility = %volatility,
+            "Returning cached volatility data"
+        );
+        
+        return Ok(Json(HistoricalVolatilityResponse {
+            historical_volatility: volatility,
+        }));
     }
+
+    // If not in cache, add it to the cache and calculate volatility
+    if let Err(e) = volatility_cache.add_token(query.token_address.clone()).await {
+        error!(
+            token_address = %query.token_address,
+            error = %e,
+            "Failed to add token to volatility cache"
+        );
+        return Err(ApiError::InternalServerError);
+    }
+
+    // Get the newly calculated volatility from the cache
+    let volatility = volatility_cache.get_volatility(&query.token_address).await
+        .ok_or(ApiError::NotEnoughData)?;
+
+    Ok(Json(HistoricalVolatilityResponse {
+        historical_volatility: volatility,
+    }))
 }
 /// Fetches historical token prices from the Birdeye public API.
 ///
@@ -141,15 +141,23 @@ async fn make_birdeye_request(
     to_date: DateTime<Utc>,
     token_address: &str,
 ) -> Result<BirdeyeHistoricalPriceResponse, reqwest::Error> {
+    // Convert DateTime objects to Unix timestamps for the API request
     let from_timestamp = from_date.timestamp();
     let to_timestamp = to_date.timestamp();
 
+    // Construct the query string with required parameters:
+    // - address: The token address to fetch prices for
+    // - address_type: Set to "token" to indicate we're querying a token
+    // - type: Set to "1D" to get daily price data
+    // - time_from: Start timestamp
+    // - time_to: End timestamp
     let query = format!(
         "address={}&address_type=token&type=1D&time_from={}&time_to={}",
         token_address, from_timestamp, to_timestamp
     );
     let request_url = format!("{}?{}", config.birdeye_base_url, query);
 
+    // Set up HTTP client with required headers
     let client = reqwest::Client::new();
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
@@ -159,6 +167,7 @@ async fn make_birdeye_request(
     );
     headers.insert("x-chain", HeaderValue::from_static("solana"));
 
+    // Make the HTTP request and parse the JSON response
     let response = client
         .get(request_url)
         .headers(headers)
@@ -182,18 +191,25 @@ async fn make_birdeye_request(
 /// // Daily changes: +5, -10
 /// // Volatility = (|5| + |10|) / 2 = 7.5
 /// ```
-fn calculate_volatility(prices: Vec<HistoricalPricePoint>) -> Option<f64> {
+pub fn calculate_volatility(prices: Vec<HistoricalPricePoint>) -> Option<f64> {
+    // Need at least 2 price points to calculate volatility
     if prices.len() < 2 {
         return None;
     }
 
+    // Calculate the sum of absolute daily price changes
+    // This uses a sliding window of 2 elements to compare consecutive prices
     let total_abs_fluctuation = prices.windows(2).fold(0.0, |acc, window| {
         let [previous, next] = window else {
             unreachable!("prices.windows(2) always yields exactly two items");
         };
+        // Add the absolute difference between consecutive prices
         acc + (next.value - previous.value).abs()
     });
 
+    // Calculate the average daily fluctuation by dividing the total by (n-1)
+    // where n is the number of price points
+    // We use (n-1) because with n price points, we have (n-1) daily changes
     let avg_fluctuation = total_abs_fluctuation / (prices.len() - 1) as f64;
     Some(avg_fluctuation)
 }
