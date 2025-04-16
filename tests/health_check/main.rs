@@ -4,16 +4,23 @@ use axum::{
 };
 use historical_volatility_api::config::AppConfig;
 use historical_volatility_api::routes::{health_check::HealthCheckResponse, register_routes};
+use historical_volatility_api::state::AppState;
+use historical_volatility_api::background::volatility_cache::VolatilityCache;
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn health_check_returns_200_ok() {
     // Arrange: Create router with dummy AppConfig
-    let app = register_routes(AppConfig {
+    let config = AppConfig {
         birdeye_api_key: "DUMMY_KEY".to_string(),
         birdeye_base_url: "https://dummy.birdeye.api".to_string(),
         app_server_port: 8080
-    });
+    };
+    
+    let volatility_cache = VolatilityCache::new(config.clone());
+    let state = AppState::new(config, volatility_cache);
+    
+    let app = register_routes(state);
 
     // Act: Send GET /health_check
     let response = app

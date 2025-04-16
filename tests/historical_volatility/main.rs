@@ -6,6 +6,8 @@ use axum::{
 use historical_volatility_api::config::AppConfig;
 use historical_volatility_api::routes::historical_volatility::HistoricalVolatilityResponse;
 use historical_volatility_api::routes::register_routes;
+use historical_volatility_api::state::AppState;
+use historical_volatility_api::background::volatility_cache::VolatilityCache;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tower::ServiceExt;
@@ -77,8 +79,11 @@ async fn get_historical_volatility_returns_positive_value_with_mock() {
         birdeye_base_url: mock_server.uri(),
         app_server_port: 8080
     };
+    
+    let volatility_cache = VolatilityCache::new(config.clone());
+    let state = AppState::new(config, volatility_cache);
 
-    let app = register_routes(config);
+    let app = register_routes(state);
     let response = send_valid_request(app).await;
 
     let status = response.status();
@@ -125,8 +130,11 @@ async fn get_historical_volatility_missing_api_key_returns_500() {
         birdeye_base_url: mock_server.uri(),
         app_server_port: 8080
     };
+    
+    let volatility_cache = VolatilityCache::new(config.clone());
+    let state = AppState::new(config, volatility_cache);
 
-    let app = register_routes(config);
+    let app = register_routes(state);
     let response = send_valid_request(app).await;
 
     let status = response.status();
@@ -151,8 +159,11 @@ async fn get_historical_volatility_invalid_query_returns_400() {
         birdeye_base_url: "https://public-api.birdeye.so/token_price/history".to_string(),
         app_server_port: 8080
     };
+    
+    let volatility_cache = VolatilityCache::new(config.clone());
+    let state = AppState::new(config, volatility_cache);
 
-    let app = register_routes(config);
+    let app = register_routes(state);
 
     let response = app
         .oneshot(
