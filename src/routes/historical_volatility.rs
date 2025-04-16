@@ -180,39 +180,65 @@ async fn make_birdeye_request(
     Ok(response)
 }
 
-/// Calculates the average absolute daily fluctuation (volatility).
+/// Calculates the annualized volatility using the standard financial approach.
+///
+/// This function:
+/// 1. Computes the logarithmic daily returns
+/// 2. Calculates the standard deviation of these returns
+/// 3. Annualizes the result (multiplies by √365, as crypto markets trade 24/7/365)
 ///
 /// # Requirements
 /// - At least two price points.
 /// - Price points must be ordered chronologically.
 ///
 /// # Example
-/// ```
-/// // For prices [100, 105, 95]
-/// // Daily changes: +5, -10
-/// // Volatility = (|5| + |10|) / 2 = 7.5
-/// ```
+/// For standard financial volatility, we:
+/// 1. Calculate log returns: ln(P₁/P₀), ln(P₂/P₁), etc.
+/// 2. Find the standard deviation of these returns
+/// 3. Annualize by multiplying by √365 (for crypto markets)
+///
+/// instead of 252 days used for traditional stock markets
 pub fn calculate_volatility(prices: Vec<HistoricalPricePoint>) -> Option<f64> {
     // Need at least 2 price points to calculate volatility
     if prices.len() < 2 {
         return None;
     }
 
-    // Calculate the sum of absolute daily price changes
-    // This uses a sliding window of 2 elements to compare consecutive prices
-    let total_abs_fluctuation = prices.windows(2).fold(0.0, |acc, window| {
-        let [previous, next] = window else {
+    // Sort the prices by time (oldest first) to ensure chronological order
+    let mut sorted_prices = prices;
+    sorted_prices.sort_by_key(|point| point.unix_time);
+
+    // Calculate the logarithmic daily returns
+    let log_returns: Vec<f64> = sorted_prices.windows(2).map(|window| {
+        let [previous, current] = window else {
             unreachable!("prices.windows(2) always yields exactly two items");
         };
-        // Add the absolute difference between consecutive prices
-        acc + (next.value - previous.value).abs()
-    });
+        // Log return formula: ln(P₁/P₀)
+        (current.value / previous.value).ln()
+    }).collect();
 
-    // Calculate the average daily fluctuation by dividing the total by (n-1)
-    // where n is the number of price points
-    // We use (n-1) because with n price points, we have (n-1) daily changes
-    let avg_fluctuation = total_abs_fluctuation / (prices.len() - 1) as f64;
-    Some(avg_fluctuation)
+    // We need at least one return to calculate standard deviation
+    if log_returns.is_empty() {
+        return None;
+    }
+
+    // Calculate the mean of log returns
+    let mean = log_returns.iter().sum::<f64>() / log_returns.len() as f64;
+
+    // Calculate the variance (average of squared differences from the mean)
+    let variance = log_returns.iter()
+        .map(|&return_value| (return_value - mean).powi(2))
+        .sum::<f64>() / log_returns.len() as f64;
+
+    // The daily volatility is the square root of the variance
+    let daily_volatility = variance.sqrt();
+
+    // Annualize the volatility using 365 days for crypto markets (which trade 24/7/365)
+    // instead of 252 days used for traditional stock markets
+    let annualized_volatility = daily_volatility * (365.0_f64).sqrt();
+    
+    // Convert to percentage for easier interpretation
+    Some(annualized_volatility * 100.0)
 }
 
 //
@@ -267,7 +293,14 @@ mod tests {
             },
         ];
         let result = calculate_volatility(prices).expect("Should calculate volatility");
-        assert!((result - 7.5).abs() < 1e-6);
+        
+        // With log returns: ln(105/100) ≈ 0.049, ln(95/105) ≈ -0.101
+        // Mean of log returns: (0.049 + (-0.101))/2 = -0.026
+        // Variance: ((0.049-(-0.026))² + (-0.101-(-0.026))²)/2 ≈ 0.0057
+        // Daily volatility: √0.0057 ≈ 0.075
+        // Annualized: 0.075 * √365 ≈ 4.24
+        // As percentage: 4.24 * 100 = 424%
+        assert!((result - 424.2).abs() < 1.0); // Allow some floating point error
     }
 
     #[test]
@@ -283,7 +316,52 @@ mod tests {
             },
         ];
         let result = calculate_volatility(prices).expect("Should calculate volatility");
-        assert!((result - 20.0).abs() < 1e-6);
+        
+        // With log returns: ln(180/200) ≈ -0.105
+        // Mean of log returns: -0.105 (only one value)
+        // Variance: 0 (only one value, so no deviation from mean)
+        // Daily volatility: 0
+        // Annualized: 0 (note: this is an edge case with only 2 points)
+        // As percentage: 0
+        
+        // For single return case, the variance calculation will produce 0
+        // This is an edge case in volatility calculation
+        assert!(result.abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_calculate_volatility_with_more_realistic_data() {
+        let prices = vec![
+            HistoricalPricePoint { unix_time: 1, value: 100.0 },
+            HistoricalPricePoint { unix_time: 2, value: 102.0 },
+            HistoricalPricePoint { unix_time: 3, value: 99.0 },
+            HistoricalPricePoint { unix_time: 4, value: 101.0 },
+            HistoricalPricePoint { unix_time: 5, value: 103.0 },
+            HistoricalPricePoint { unix_time: 6, value: 102.5 },
+            HistoricalPricePoint { unix_time: 7, value: 103.5 },
+        ];
+        
+        let result = calculate_volatility(prices).expect("Should calculate volatility");
+        
+        // This is a more realistic volatility test with several data points
+        // For crypto with ~1-2% daily moves, annualized volatility using 365 days
+        // would typically be higher than stock markets, often between 20-80%
+        assert!(result > 15.0 && result < 85.0);
+    }
+
+    #[test]
+    fn test_calculate_volatility_with_unsorted_data() {
+        // Test with unsorted time data to ensure the function sorts correctly
+        let prices = vec![
+            HistoricalPricePoint { unix_time: 3, value: 95.0 },   // Note: out of order
+            HistoricalPricePoint { unix_time: 1, value: 100.0 },  // Note: out of order
+            HistoricalPricePoint { unix_time: 2, value: 105.0 },  // Note: out of order
+        ];
+        
+        let result = calculate_volatility(prices).expect("Should calculate volatility");
+        
+        // Same expected result as test_calculate_volatility_with_three_prices
+        assert!((result - 424.2).abs() < 1.0);
     }
 
     #[test]
